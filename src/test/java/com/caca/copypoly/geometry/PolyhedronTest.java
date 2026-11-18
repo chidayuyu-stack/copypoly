@@ -23,8 +23,8 @@ class PolyhedronTest {
         assertThrows(IllegalArgumentException.class,()->hull("0,0,0;16,0,0;0,0,16;16,0,16"));
         assertThrows(IllegalArgumentException.class,()->hull("0,0,0;1,1,1;2,2,2;3,3,3"));
         assertThrows(IllegalArgumentException.class,()->hull("17,0,0"));
-        assertThrows(IllegalArgumentException.class,()->hull("0.5,0,0"));
-        assertThrows(IllegalArgumentException.class,()->Polyhedron.fromPacked(new int[33]));
+        assertThrows(IllegalArgumentException.class,()->hull("0.55,0,0"));
+        assertThrows(IllegalArgumentException.class,()->Polyhedron.fromPacked(new int[65]));
         assertThrows(IllegalArgumentException.class,()->Polyhedron.Point.unpack(32768));
         assertThrows(IllegalArgumentException.class,()->Polyhedron.Point.unpack(-1));
     }
@@ -45,12 +45,12 @@ class PolyhedronTest {
         Random random=new Random(0xCA7);
         for(int trial=0;trial<100;trial++) {
             List<Polyhedron.Point> pts=new ArrayList<>();
-            for(int i=0;i<32;i++)pts.add(new Polyhedron.Point(random.nextInt(17),random.nextInt(17),random.nextInt(17)));
+            for(int i=0;i<64;i++)pts.add(new Polyhedron.Point(random.nextInt(161)/10.0,random.nextInt(161)/10.0,random.nextInt(161)/10.0));
             var h=Polyhedron.of(pts);
             assertTrue(volume(h)>0);assertTrue(h.collisionBoxes().size()<=64);
             Map<String,Integer> edges=new HashMap<>();
             for(var f:h.faces()) {
-                for(var p:pts)assertTrue(f.plane().distance(p.x(),p.y(),p.z())<=0);
+                for(var p:pts)assertTrue(f.plane().distance(p.x(),p.y(),p.z())<=1e-7);
                 for(int i=0;i<f.vertices().size();i++){
                     int a=f.vertices().get(i).packed(),b=f.vertices().get((i+1)%f.vertices().size()).packed();
                     edges.merge(Math.min(a,b)+":"+Math.max(a,b),1,Integer::sum);
@@ -59,6 +59,45 @@ class PolyhedronTest {
             assertTrue(edges.values().stream().allMatch(n->n==2));
             verifyCoverage(h,random);
         }
+    }
+    @Test void accepts64PointsAndKeepsDecimalFacesExact() {
+        List<Polyhedron.Point> points=new ArrayList<>();
+        for(int x=0;x<4;x++)for(int y=0;y<4;y++)for(int z=0;z<4;z++)
+            points.add(new Polyhedron.Point(.1+x*.1,.2+y*.1,.3+z*.1));
+        var h=Polyhedron.of(points);
+        assertEquals(64,h.points().size());assertEquals(6,h.faces().size());
+        assertEquals(.027,volume(h),1e-9);
+        assertSame(h,Polyhedron.fromPacked(h.packed()));
+        assertFalse(h.collisionBoxes().isEmpty());
+        verifyCoverage(h,new Random(123));
+        points.add(new Polyhedron.Point(16,16,16));
+        assertThrows(IllegalArgumentException.class,()->Polyhedron.of(points));
+    }
+    @Test void oldIntegerDataAndAllDecimalCoordinatesRoundTrip() {
+        for(int x=0;x<=16;x++)for(int y=0;y<=16;y++)for(int z=0;z<=16;z++) {
+            int old=x<<10|y<<5|z;
+            var p=Polyhedron.Point.unpack(old);
+            assertEquals(new Polyhedron.Point(x,y,z),p);assertEquals(old,p.packed());
+        }
+        for(int t=0;t<=160;t++) {
+            var p=new Polyhedron.Point(t/10.0,(160-t)/10.0,.1);
+            assertEquals(p,Polyhedron.Point.unpack(p.packed()));
+        }
+        assertThrows(IllegalArgumentException.class,()->Polyhedron.Point.unpack(1<<24|161<<16));
+        assertThrows(IllegalArgumentException.class,()->Polyhedron.Point.unpack(1<<25));
+        assertThrows(IllegalArgumentException.class,()->new Polyhedron.Point(Double.NaN,0,0));
+        assertThrows(IllegalArgumentException.class,()->new Polyhedron.Point(Double.POSITIVE_INFINITY,0,0));
+    }
+    @Test void pixelAndControlDragsSnapClampAndPreserveOtherAxes() {
+        assertEquals(9,VertexEditing.snap(8,1.26,false));
+        assertEquals(9.3,VertexEditing.snap(8,1.26,true));
+        assertEquals(7,VertexEditing.snap(8,-1.26,false));
+        assertEquals(6.7,VertexEditing.snap(8,-1.26,true));
+        assertEquals(9.3,VertexEditing.snap(8.3,1.26,false));
+        assertEquals(0,VertexEditing.snap(.1,-20,true));
+        assertEquals(16,VertexEditing.snap(15.9,20,false));
+        var p=new Polyhedron.Point(1.1,2.2,3.3).withAxis(1,4.4);
+        assertEquals(new Polyhedron.Point(1.1,4.4,3.3),p);
     }
     private static void verifyCoverage(Polyhedron h,Random r) {
         // Positive convex combinations are known interior points, independent of the plane implementation.

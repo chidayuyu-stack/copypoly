@@ -29,6 +29,7 @@ import java.util.*;
 public class PolyModel extends BakedModelWrapper<BakedModel> {
     private record Mesh(Map<RenderType,List<BakedQuad>> layers, TextureAtlasSprite particle) {}
     private record Key(Polyhedron poly, Direction direction, List<BakedQuad> source) {}
+    private record RawKey(Polyhedron poly,BlockState material) {}
     private static final ModelProperty<Mesh> MESH = new ModelProperty<>();
     private final Map<Key,List<BakedQuad>> cache = Collections.synchronizedMap(new LinkedHashMap<>(512,.75f,true) {
         protected boolean removeEldestEntry(Map.Entry<Key,List<BakedQuad>> e) { return size()>512; }
@@ -37,6 +38,9 @@ public class PolyModel extends BakedModelWrapper<BakedModel> {
         protected boolean removeEldestEntry(Map.Entry<Polyhedron,PolyModel> e) {return size()>64;}
     };
     private final Polyhedron itemShape;
+    private final Map<RawKey,Mesh> rawMeshes=Collections.synchronizedMap(new LinkedHashMap<>(64,.75f,true) {
+        protected boolean removeEldestEntry(Map.Entry<RawKey,Mesh> entry){return size()>64;}
+    });
     private Mesh itemMesh;
     public PolyModel(BakedModel base) { this(base,Polyhedron.CUBE); }
     private PolyModel(BakedModel base,Polyhedron shape) { super(base);itemShape=shape; }
@@ -72,6 +76,15 @@ public class PolyModel extends BakedModelWrapper<BakedModel> {
                     List<BakedQuad> built=new ArrayList<>();
                     for(Polyhedron.Face face:poly.faces()) if(direction(face.plane())==dir)
                         for(BakedQuad q:quads) projectFace(built,face,q,dir);
+                    if(!poly.closed()) {
+                        // Open editing drafts have no inside/outside yet. Show both
+                        // sides until compile() can infer a closed shell's winding.
+                        for(var q:List.copyOf(built)) {
+                            int[] sourceVertices=q.getVertices(),reversed=sourceVertices.clone();int stride=reversed.length/4;
+                            for(int i=0;i<4;i++)System.arraycopy(sourceVertices,(3-i)*stride,reversed,i*stride,stride);
+                            built.add(new BakedQuad(reversed,q.getTintIndex(),q.getDirection().getOpposite(),q.getSprite(),q.isShade(),q.hasAmbientOcclusion()));
+                        }
+                    }
                     projected=List.copyOf(built); cache.put(key,projected);
                 }
                 result.addAll(projected);
@@ -87,6 +100,17 @@ public class PolyModel extends BakedModelWrapper<BakedModel> {
         }
         return itemMesh;
     }
+    private Mesh meshData(ModelData data) {
+        Mesh baked=data.get(MESH);if(baked!=null)return baked;
+        Polyhedron poly=data.get(PolyBlockEntity.GEOMETRY);if(poly==null)return itemMesh();
+        // Sable's single-block renderer passes the BE's raw ModelData directly,
+        // without calling BakedModel.getModelData first. Resolve that same shape
+        // and material here, and use identical layers for discovery and quads.
+        BlockState material=CopycatModel.getMaterial(data);var key=new RawKey(poly,material);
+        Mesh known=rawMeshes.get(key);if(known!=null)return known;
+        var source=Minecraft.getInstance().getBlockRenderer().getBlockModel(material);
+        var built=mesh(poly,material,source,ModelData.EMPTY,42);rawMeshes.put(key,built);return built;
+    }
     public List<BakedQuad> preview(Polyhedron poly, BlockState material) {
         Mesh m=mesh(poly,material,Minecraft.getInstance().getBlockRenderer().getBlockModel(material),ModelData.EMPTY,42);
         return m.layers.values().stream().flatMap(Collection::stream).toList();
@@ -96,13 +120,12 @@ public class PolyModel extends BakedModelWrapper<BakedModel> {
     }
     @Override public List<BakedQuad> getQuads(BlockState state,Direction side,RandomSource rand,ModelData data,RenderType type) {
         if(side!=null) return List.of(); // Slanted faces must not be culled using the full-block neighbor test.
-        Mesh m=data.get(MESH); if(m==null) m=itemMesh();
+        Mesh m=meshData(data);
         if(type!=null) return m.layers.getOrDefault(type,List.of());
         return m.layers.values().stream().flatMap(Collection::stream).toList();
     }
     @Override public ChunkRenderTypeSet getRenderTypes(BlockState s,RandomSource r,ModelData d) {
-        Mesh m=d.get(MESH);
-        return m==null?ChunkRenderTypeSet.of(RenderType.solid()):ChunkRenderTypeSet.of(m.layers.keySet());
+        return ChunkRenderTypeSet.of(meshData(d).layers.keySet());
     }
     @Override public TextureAtlasSprite getParticleIcon(ModelData data) {
         Mesh m=data.get(MESH);return m==null?super.getParticleIcon(data):m.particle;
@@ -110,7 +133,7 @@ public class PolyModel extends BakedModelWrapper<BakedModel> {
     @Override public boolean useAmbientOcclusion() {return false;}
     @Override public TriState useAmbientOcclusion(BlockState s,ModelData d,RenderType t) {return TriState.FALSE;}
     @Override public List<BakedModel> getRenderPasses(ItemStack stack,boolean fabulous) {return List.of(this);}
-    @Override public List<RenderType> getRenderTypes(ItemStack stack,boolean fabulous) {return List.of(RenderType.entitySolid(TextureAtlas.LOCATION_BLOCKS));}
+    @Override public List<RenderType> getRenderTypes(ItemStack stack,boolean fabulous) {return List.of(RenderType.entityCutoutNoCull(TextureAtlas.LOCATION_BLOCKS));}
     @Override public BakedModel applyTransform(ItemDisplayContext type,PoseStack poses,boolean left) {
         originalModel.applyTransform(type,poses,left);return this;
     }

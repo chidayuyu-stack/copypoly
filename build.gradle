@@ -17,6 +17,7 @@ base {
 }
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+java.withSourcesJar()
 
 sourceSets {
     gametest {
@@ -38,6 +39,15 @@ neoForge {
             gameDirectory = project.file(providers.gradleProperty('clientRunDir').getOrElse('run/client'))
             programArguments.addAll '--width', '1280', '--height', '800'
             systemProperty 'copypoly.clientSmoke', providers.gradleProperty('clientSmoke').getOrElse('false')
+            systemProperty 'copypoly.editorSmoke', providers.gradleProperty('editorSmoke').getOrElse('false')
+            systemProperty 'copypoly.collisionSmoke', providers.gradleProperty('collisionSmoke').getOrElse('false')
+            systemProperty 'copypoly.collisionControl', providers.gradleProperty('collisionControl').getOrElse('false')
+            systemProperty 'copypoly.sableEditorSmoke', providers.gradleProperty('sableEditorSmoke').getOrElse('false')
+            systemProperty 'copypoly.vertexClipboardSmoke', providers.gradleProperty('vertexClipboardSmoke').getOrElse('false')
+            systemProperty 'copypoly.freeformSmoke', providers.gradleProperty('freeformSmoke').getOrElse('false')
+            systemProperty 'copypoly.customVertexSmoke', providers.gradleProperty('customVertexSmoke').getOrElse('false')
+            systemProperty 'copypoly.topologySmoke', providers.gradleProperty('topologySmoke').getOrElse('false')
+            systemProperty 'copypoly.lineSmoke', providers.gradleProperty('lineSmoke').getOrElse('false')
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         }
 
@@ -49,7 +59,7 @@ neoForge {
         gameTestServer {
             type = "gameTestServer"
             sourceSet = sourceSets.gametest
-            gameDirectory = project.file('run/gametest')
+            gameDirectory = project.file(providers.gradleProperty('sableTest').getOrElse('false').toBoolean() ? 'run/sable-gametest' : 'run/gametest')
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
             systemProperty 'copypoly.persistencePhase', providers.gradleProperty('persistencePhase').getOrElse('')
         }
@@ -77,6 +87,14 @@ neoForge {
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 configurations { createBundle }
+// Supply the reference distribution at build time; never bundle Sable into CopyPoly.
+def sableJar = providers.gradleProperty('sableJar').map { file(it) }
+        .getOrElse(file('libs/sable-neoforge-1.21.1-2.0.6.jar'))
+def extractSableLibraries = tasks.register('extractSableLibraries', Sync) {
+    from(provider { zipTree(sableJar) })
+    include 'META-INF/jarjar/*sable_rapier*.jar', 'META-INF/jarjar/sable-companion*.jar'
+    into layout.buildDirectory.dir('sableLibraries')
+}
 // Compile against Create's bundled libraries, matching the selected Create version.
 def extractCreateLibraries = tasks.register('extractCreateLibraries', Sync) {
     from(configurations.createBundle.elements.map { elements -> elements.collect { zipTree(it.asFile) } })
@@ -84,6 +102,9 @@ def extractCreateLibraries = tasks.register('extractCreateLibraries', Sync) {
     into layout.buildDirectory.dir('createLibraries')
 }
 dependencies {
+    compileOnly files(sableJar)
+    compileOnly files(fileTree(layout.buildDirectory.dir('sableLibraries')) { include '**/*.jar' }).builtBy(extractSableLibraries)
+    if (providers.gradleProperty('sableTest').getOrElse('false').toBoolean()) runtimeOnly files(sableJar)
     createBundle("maven.modrinth:create:${create_version}") { transitive = false }
     implementation("maven.modrinth:create:${create_version}") { transitive = false }
     compileOnly files(fileTree(layout.buildDirectory.dir('createLibraries')) { include '**/*.jar' }).builtBy(extractCreateLibraries)

@@ -20,10 +20,217 @@ public final class PolyGameTests {
     @net.neoforged.bus.api.SubscribeEvent
     public static void register(net.neoforged.neoforge.event.RegisterGameTestsEvent event) {
         event.register(PolyGameTests.class);
+        if (net.neoforged.fml.ModList.get().isLoaded("sable")) event.register(SablePhysicsGameTests.class);
         if (!System.getProperty("copypoly.persistencePhase", "").isEmpty()) event.register(MaterialPersistenceProbe.class);
     }
     private static final BlockPos P=new BlockPos(2,2,2);
     private static Polyhedron tetra() {return Polyhedron.of(Polyhedron.parse("0,0,0;16,0,0;0,16,0;0,0,16"));}
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void lineCutReferencePositionsSurvivePacketSyncPersistenceDropAndFurtherEdits(GameTestHelper h) {
+        var shape=TopologyFixtures.lineInset();h.setBlock(P,Copypoly.POLY.get());PolyBlockEntity be=h.getBlockEntity(P);
+        var player=h.makeMockPlayer(GameType.CREATIVE);player.setPos(Vec3.atCenterOf(h.absolutePos(P)));
+        var menu=new PolyMenu(83,player.getInventory(),h.absolutePos(P),be.document(),be.revision());player.containerMenu=menu;
+        var buf=new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(),h.getLevel().registryAccess());
+        PolyPackets.Apply.CODEC.encode(buf,new PolyPackets.Apply(83,menu.revision,shape));var decoded=PolyPackets.Apply.CODEC.decode(buf);buf.release();
+        h.runAfterDelay(5,()->{
+            h.assertTrue(PolyPackets.apply(player,decoded).isEmpty(),"Server rejected automatic normal-vertex cuts");
+            h.assertTrue(be.document().equals(shape) && !be.poly().contains(8,12,8),"Server filled the inset");
+            var restored=new PolyBlockEntity(h.absolutePos(P),be.getBlockState());restored.loadWithComponents(be.saveWithoutMetadata(h.getLevel().registryAccess()),h.getLevel().registryAccess());
+            h.assertTrue(restored.document().equals(shape),"Persistence lost reference positions");
+            var client=new PolyBlockEntity(h.absolutePos(P),be.getBlockState());client.readClient(be.writeClient(new net.minecraft.nbt.CompoundTag(),h.getLevel().registryAccess()),h.getLevel().registryAccess());
+            h.assertTrue(client.document().equals(shape),"Sync lost line document");
+            var drops=Block.getDrops(be.getBlockState(),h.getLevel(),h.absolutePos(P),be);h.assertTrue(drops.size()==1 && PolyItem.readDocument(drops.getFirst()).equals(shape),"Drop lost line document");
+            h.setBlock(P.east(),Copypoly.POLY.get());Copypoly.POLY.get().setPlacedBy(h.getLevel(),h.absolutePos(P.east()),be.getBlockState(),player,drops.getFirst());
+            PolyBlockEntity placed=h.getBlockEntity(P.east());
+            var edited=placed.document().toBuilder().moveVertex(8,4,10,4).build();placed.setDocument(edited);
+            h.assertTrue(edited.pendingConnections().isEmpty() && !placed.poly().contains(8,12,8),"Further edit after placement lost the reference plane");
+            var remove=shape.toBuilder();for(int id=8;id<12;id++)remove.removeVertex(id);placed.setDocument(remove.build());
+            h.assertTrue(placed.poly().contains(8,15,8),"Deleting inset points did not restore base after reload");h.succeed();
+        });
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void arbitraryTunnelSurvivesGraphPacketPersistenceDropAndPlacement(GameTestHelper h) {
+        var graph=TopologyFixtures.tunnel();h.setBlock(P,Copypoly.POLY.get());PolyBlockEntity be=h.getBlockEntity(P);
+        var player=h.makeMockPlayer(GameType.CREATIVE);player.setPos(Vec3.atCenterOf(h.absolutePos(P)));
+        var menu=new PolyMenu(78,player.getInventory(),h.absolutePos(P),be.document(),be.revision());player.containerMenu=menu;
+        var buf=new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(),h.getLevel().registryAccess());
+        PolyPackets.Apply.CODEC.encode(buf,new PolyPackets.Apply(78,menu.revision,graph));var packet=PolyPackets.Apply.CODEC.decode(buf);buf.release();
+        h.runAfterDelay(5,()->{
+            h.assertTrue(PolyPackets.apply(player,packet).isEmpty(),"Tunnel packet was rejected");
+            h.assertTrue(be.document().manualMesh() && !be.poly().contains(8,8,8),"Server filled the tunnel with a convex hull");
+            var restored=new PolyBlockEntity(h.absolutePos(P),be.getBlockState());restored.loadWithComponents(be.saveWithoutMetadata(h.getLevel().registryAccess()),h.getLevel().registryAccess());
+            h.assertTrue(restored.document().equals(graph) && !restored.poly().contains(8,8,8),"Persistence lost explicit topology");
+            var client=new PolyBlockEntity(h.absolutePos(P),be.getBlockState());client.readClient(be.writeClient(new net.minecraft.nbt.CompoundTag(),h.getLevel().registryAccess()),h.getLevel().registryAccess());
+            h.assertTrue(client.document().equals(graph),"Client sync lost explicit topology");
+            var drops=Block.getDrops(be.getBlockState(),h.getLevel(),h.absolutePos(P),be);h.assertTrue(drops.size()==1 && PolyItem.readDocument(drops.getFirst()).equals(graph),"Drop lost tunnel");
+            h.setBlock(P.east(),Copypoly.POLY.get());Copypoly.POLY.get().setPlacedBy(h.getLevel(),h.absolutePos(P.east()),be.getBlockState(),player,drops.getFirst());
+            PolyBlockEntity placed=h.getBlockEntity(P.east());h.assertTrue(placed.document().equals(graph),"Placement lost mesh document");
+            var hole=new AABB(.45,.1,.45,.55,.9,.55);h.assertTrue(placed.shape().toAabbs().stream().noneMatch(box->box.intersects(hole)),"Collision filled through hole");h.succeed();
+        });
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void unfinishedExplicitSurfaceCannotReplaceTheAuthoritativeSolid(GameTestHelper h) {
+        h.setBlock(P,Copypoly.POLY.get());PolyBlockEntity be=h.getBlockEntity(P);
+        var player=h.makeMockPlayer(GameType.CREATIVE);player.setPos(Vec3.atCenterOf(h.absolutePos(P)));
+        var menu=new PolyMenu(79,player.getInventory(),h.absolutePos(P),be.document(),be.revision());player.containerMenu=menu;
+        var open=TopologyFixtures.tunnel().toBuilder().removeFaces(java.util.List.of(0,1)).build();
+        h.runAfterDelay(5,()->{
+            var error=PolyPackets.apply(player,new PolyPackets.Apply(79,menu.revision,open));
+            h.assertTrue(!error.isEmpty() && be.poly()==Polyhedron.CUBE && !be.document().manualMesh(),"Open draft changed server collision");h.succeed();
+        });
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void vertexGraphSurvivesPacketSyncSaveDropPlacementAndApiRemoval(GameTestHelper h) {
+        var b=com.caca.copypoly.api.PolyShape.fromGeometry(Polyhedron.CUBE).toBuilder();
+        int custom=b.addCustomVertex(8,4,8),pending=b.addCustomVertex(4,12,4);
+        for(int target:new int[]{2,3,6,7})b.connect(custom,target);
+        b.connect(pending,2);var graph=b.build();
+        h.setBlock(P,Copypoly.POLY.get());PolyBlockEntity be=h.getBlockEntity(P);
+        var player=h.makeMockPlayer(GameType.CREATIVE);player.setPos(Vec3.atCenterOf(h.absolutePos(P)));
+        var menu=new PolyMenu(64,player.getInventory(),h.absolutePos(P),be.document(),be.revision());player.containerMenu=menu;
+        var buf=new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(),h.getLevel().registryAccess());
+        PolyPackets.Apply.CODEC.encode(buf,new PolyPackets.Apply(64,menu.revision,graph));var packet=PolyPackets.Apply.CODEC.decode(buf);buf.release();
+        h.runAfterDelay(5,()->{
+            h.assertTrue(PolyPackets.apply(player,packet).isEmpty(),"Graph apply rejected");
+            h.assertTrue(be.document().equals(graph) && !be.poly().contains(8,12,8),"Graph lost custom dent");
+            var restored=new PolyBlockEntity(h.absolutePos(P),be.getBlockState());
+            restored.loadWithComponents(be.saveWithoutMetadata(h.getLevel().registryAccess()),h.getLevel().registryAccess());
+            h.assertTrue(restored.document().equals(graph),"NBT lost vertex graph");
+            var client=new PolyBlockEntity(h.absolutePos(P),be.getBlockState());
+            client.readClient(be.writeClient(new net.minecraft.nbt.CompoundTag(),h.getLevel().registryAccess()),h.getLevel().registryAccess());
+            h.assertTrue(client.document().equals(graph),"Client sync lost links/types/pending point");
+            var drops=Block.getDrops(be.getBlockState(),h.getLevel(),h.absolutePos(P),be);
+            h.assertTrue(drops.size()==1 && PolyItem.readDocument(drops.getFirst()).equals(graph),"Drop lost editing document");
+            var other=P.east();h.setBlock(other,Copypoly.POLY.get());
+            Copypoly.POLY.get().setPlacedBy(h.getLevel(),h.absolutePos(other),be.getBlockState(),player,drops.getFirst());
+            h.assertTrue(com.caca.copypoly.api.CopypolyApi.getShape(h.getLevel(),h.absolutePos(other)).equals(graph),"Placement/API lost graph");
+            var removed=graph.toBuilder().removeVertex(custom).build();
+            com.caca.copypoly.api.CopypolyApi.setShape(h.getLevel(),h.absolutePos(other),removed);
+            PolyBlockEntity placed=h.getBlockEntity(other);
+            h.assertTrue(placed.poly().contains(8,12,8),"Deleting custom point did not restore top surface");
+            h.assertTrue(placed.document().vertex(pending).type()==com.caca.copypoly.api.VertexType.CUSTOM,"API discarded unrelated draft point");
+            var reset=drops.getFirst().copy();PolyItem.saveShape(reset,Polyhedron.CUBE);
+            h.assertTrue(!PolyItem.readDocument(reset).managed(),"Legacy save retained stale graph");
+            h.succeed();
+        });
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void invalidGraphPacketCannotModifyAuthoritativeDocument(GameTestHelper h) {
+        h.setBlock(P,Copypoly.POLY.get());PolyBlockEntity be=h.getBlockEntity(P);
+        var player=h.makeMockPlayer(GameType.CREATIVE);player.setPos(Vec3.atCenterOf(h.absolutePos(P)));
+        var menu=new PolyMenu(65,player.getInventory(),h.absolutePos(P),be.document(),be.revision());player.containerMenu=menu;
+        h.runAfterDelay(5,()->{
+            var error=PolyPackets.apply(player,new PolyPackets.Apply(65,menu.revision,new int[0],new int[0],new int[]{1,0,8,65}));
+            h.assertTrue(error.equals("graph") && be.poly()==Polyhedron.CUBE,"Malformed graph changed the block");
+            var buf=new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(),h.getLevel().registryAccess());
+            buf.writeVarInt(65);buf.writeVarInt(menu.revision);buf.writeVarIntArray(new int[0]);buf.writeVarIntArray(new int[0]);
+            buf.writeVarInt(com.caca.copypoly.api.PolyShape.MAX_PACKED+1);
+            boolean rejected=false;try{PolyPackets.Apply.CODEC.decode(buf);}catch(io.netty.handler.codec.DecoderException expected){rejected=true;}finally{buf.release();}
+            h.assertTrue(rejected,"Packet decoder accepted an unbounded graph");h.succeed();
+        });
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void freeformPacketPreservesFacesAcrossSyncSaveDropAndPlacement(GameTestHelper h) {
+        var base=Polyhedron.freeformFromHull(Polyhedron.CUBE_POINTS);
+        var points=new java.util.ArrayList<>(base.points());points.set(7,new Polyhedron.Point(8,8,8));
+        var dent=base.editVertices(points);
+        h.setBlock(P,Copypoly.POLY.get());PolyBlockEntity be=h.getBlockEntity(P);
+        var player=h.makeMockPlayer(GameType.CREATIVE);player.setPos(Vec3.atCenterOf(h.absolutePos(P)));
+        var menu=new PolyMenu(42,player.getInventory(),h.absolutePos(P),be.poly(),be.revision());player.containerMenu=menu;
+        var packet=new PolyPackets.Apply(42,menu.revision,dent.packed(),dent.packedTriangles());
+        var buffer=new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(),h.getLevel().registryAccess());
+        PolyPackets.Apply.CODEC.encode(buffer,packet);var decoded=PolyPackets.Apply.CODEC.decode(buffer);buffer.release();
+        h.assertTrue(java.util.Arrays.equals(packet.faces(),decoded.faces()),"Network codec lost mesh faces");
+        h.runAfterDelay(5,()->{
+            h.assertTrue(PolyPackets.apply(player,decoded).isEmpty(),"Server rejected a valid concave mesh");
+            h.assertTrue(be.poly()==dent,"Server rebuilt the free mesh as a convex hull");
+            var restored=new PolyBlockEntity(h.absolutePos(P),be.getBlockState());
+            restored.loadWithComponents(be.saveWithoutMetadata(h.getLevel().registryAccess()),h.getLevel().registryAccess());
+            h.assertTrue(restored.poly()==dent && restored.poly().freeform(),"NBT lost mesh mode or topology");
+            var client=new PolyBlockEntity(h.absolutePos(P),be.getBlockState());
+            client.readClient(be.writeClient(new net.minecraft.nbt.CompoundTag(),h.getLevel().registryAccess()),h.getLevel().registryAccess());
+            h.assertTrue(client.poly()==dent,"Client sync lost the concave mesh");
+            var drops=Block.getDrops(be.getBlockState(),h.getLevel(),h.absolutePos(P),be);
+            h.assertTrue(drops.size()==1 && PolyItem.readShape(drops.getFirst())==dent,"Dropped item lost mesh faces");
+            var other=P.east();h.setBlock(other,Copypoly.POLY.get());
+            Copypoly.POLY.get().setPlacedBy(h.getLevel(),h.absolutePos(other),be.getBlockState(),player,drops.getFirst());
+            h.assertTrue(((PolyBlockEntity)h.getBlockEntity(other)).poly()==dent,"Placement lost free deformation");
+            var cavity=new AABB(7/16.0-.01,7/16.0-.01,13/16.0-.01,7/16.0+.01,7/16.0+.01,13/16.0+.01);
+            h.assertTrue(be.shape().toAabbs().stream().noneMatch(box->box.intersects(cavity)),"Player collision filled the dent");
+            var reset=drops.getFirst().copy();PolyItem.saveShape(reset,Polyhedron.CUBE);
+            h.assertTrue(PolyItem.readShape(reset)==Polyhedron.CUBE,"Reset item retained old mesh topology");
+            h.succeed();
+        });
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void invalidMeshPacketCannotModifyTheBlock(GameTestHelper h) {
+        h.setBlock(P,Copypoly.POLY.get());PolyBlockEntity be=h.getBlockEntity(P);
+        var player=h.makeMockPlayer(GameType.CREATIVE);player.setPos(Vec3.atCenterOf(h.absolutePos(P)));
+        var menu=new PolyMenu(43,player.getInventory(),h.absolutePos(P),be.poly(),be.revision());player.containerMenu=menu;
+        h.runAfterDelay(5,()->{
+            var error=PolyPackets.apply(player,new PolyPackets.Apply(43,menu.revision,be.poly().packed(),new int[]{0,1,2}));
+            h.assertTrue(error.equals("mesh") && be.poly()==Polyhedron.CUBE,"Open mesh packet changed authoritative geometry");h.succeed();
+        });
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void slopeOutlineUsesNineHullEdgesAndRetainsSteppedCollision(GameTestHelper h) {
+        var slope = Polyhedron.of(Polyhedron.parse("0,0,0;16,0,0;0,0,16;16,0,16;0,16,16;16,16,16"));
+        h.setBlock(P, Copypoly.POLY.get());
+        PolyBlockEntity be = h.getBlockEntity(P);
+        be.setPoly(slope);
+        var outline = be.getBlockState().getShape(h.getLevel(), h.absolutePos(P));
+        var collision = be.getBlockState().getCollisionShape(h.getLevel(), h.absolutePos(P));
+        var edges = new java.util.ArrayList<double[]>();
+        outline.forAllEdges((x0,y0,z0,x1,y1,z1) -> edges.add(new double[]{x0,y0,z0,x1,y1,z1}));
+        h.assertTrue(edges.size() == 9, "Slope outline contained duplicate or stair-step edges: " + edges.size());
+        h.assertTrue(edges.stream().filter(e -> e[1] != e[4] && e[2] != e[5]).count() == 2, "Missing the two diagonal slope edges");
+        h.assertTrue(collision.toAabbs().size() == 8, "Slope no longer uses eight solid steps");
+        h.assertTrue(outline.toAabbs().equals(collision.toAabbs()), "Outline wrapper changed the collision voxel grid");
+        var box = new AABB(.4,2,.4,.6,2.4,.6);
+        h.assertTrue(collision.collide(Direction.Axis.Y,box,-3) == outline.collide(Direction.Axis.Y,box,-3), "Wrapper changed physical collision");
+        be.setPoly(tetra());
+        var changed = new java.util.ArrayList<double[]>();
+        be.outline().forAllEdges((a,b,c,d,e,f) -> changed.add(new double[]{a,b,c,d,e,f}));
+        h.assertTrue(changed.size() == 6 && outline != be.outline(), "Saved edit retained the old selection outline");
+        h.succeed();
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void editorAllowsWalkingAroundTargetButClosesBeyond16Blocks(GameTestHelper h) {
+        h.setBlock(P,Copypoly.POLY.get());
+        PolyBlockEntity be=h.getBlockEntity(P);
+        var player=h.makeMockPlayer(GameType.SURVIVAL);
+        var menu=new PolyMenu(25,player.getInventory(),h.absolutePos(P),be.poly(),be.revision());
+        Vec3 center=Vec3.atCenterOf(h.absolutePos(P));
+        player.setPos(center.add(10,0,0));
+        h.assertTrue(menu.stillValid(player),"Walking around the target closed the editor");
+        player.setPos(center.add(17,0,0));
+        h.assertTrue(!menu.stillValid(player),"Editor accepted edits beyond its range");
+        h.succeed();
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void decimal64PointPacketSurvivesSaveDropAndPlacement(GameTestHelper h) {
+        var points=new java.util.ArrayList<Polyhedron.Point>();
+        for(int x=0;x<4;x++)for(int y=0;y<4;y++)for(int z=0;z<4;z++)
+            points.add(new Polyhedron.Point(x*5.3,y*5.3,z*5.3));
+        var poly=Polyhedron.of(points);
+        h.setBlock(P,Copypoly.POLY.get());
+        PolyBlockEntity be=h.getBlockEntity(P);
+        var player=h.makeMockPlayer(GameType.CREATIVE);
+        player.setPos(Vec3.atCenterOf(h.absolutePos(P)));
+        var menu=new PolyMenu(19,player.getInventory(),h.absolutePos(P),be.poly(),be.revision());
+        player.containerMenu=menu;
+        h.assertTrue(PolyPackets.apply(player,new PolyPackets.Apply(19,menu.revision,poly.packed())).isEmpty(),"64-point decimal packet rejected");
+        var restored=new PolyBlockEntity(h.absolutePos(P),be.getBlockState());
+        restored.loadWithComponents(be.saveWithoutMetadata(h.getLevel().registryAccess()),h.getLevel().registryAccess());
+        h.assertTrue(restored.poly()==poly,"Decimal shape lost during save/reload");
+        var drops=Block.getDrops(be.getBlockState(),h.getLevel(),h.absolutePos(P),be);
+        h.assertTrue(drops.size()==1 && PolyItem.readShape(drops.getFirst())==poly,"Decimal points lost in drop");
+        BlockPos next=P.offset(1,0,0);h.setBlock(next,Copypoly.POLY.get());
+        Copypoly.POLY.get().setPlacedBy(h.getLevel(),h.absolutePos(next),be.getBlockState(),player,drops.getFirst());
+        PolyBlockEntity placed=h.getBlockEntity(next);
+        h.assertTrue(placed.poly()==poly && !placed.shape().isEmpty(),"Decimal placement/collision failed");
+        h.succeed();
+    }
     @GameTest(template="empty",templateNamespace="copypoly")
     public static void appliedMaterialsSurviveRepeatedSaveAndReload(GameTestHelper h) {
         var block=Copypoly.POLY.get();

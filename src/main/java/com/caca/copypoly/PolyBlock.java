@@ -61,9 +61,11 @@ public class PolyBlock extends CopycatBlock {
     @Override public boolean canConnectTexturesToward(BlockAndTintGetter world, BlockPos from, BlockPos to, BlockState state) { return false; }
     @Override public boolean isIgnoredConnectivitySide(BlockAndTintGetter w, BlockState s, Direction d, BlockPos a, BlockPos b) { return true; }
     @Override protected VoxelShape getShape(BlockState s, BlockGetter w, BlockPos p, CollisionContext c) {
+        return w.getBlockEntity(p) instanceof PolyBlockEntity be ? be.outline() : Shapes.block();
+    }
+    @Override protected VoxelShape getCollisionShape(BlockState s, BlockGetter w, BlockPos p, CollisionContext c) {
         return w.getBlockEntity(p) instanceof PolyBlockEntity be ? be.shape() : Shapes.block();
     }
-    @Override protected VoxelShape getCollisionShape(BlockState s, BlockGetter w, BlockPos p, CollisionContext c) { return getShape(s,w,p,c); }
     @Override protected VoxelShape getOcclusionShape(BlockState s, BlockGetter w, BlockPos p) { return Shapes.empty(); }
     @Override protected boolean isPathfindable(BlockState state, PathComputationType type) { return false; }
     @Override public boolean addLandingEffects(BlockState state, ServerLevel level, BlockPos pos, BlockState landedState,
@@ -108,27 +110,27 @@ public class PolyBlock extends CopycatBlock {
     public void openEditor(Level level, BlockPos pos, Player player) {
         if (player instanceof ServerPlayer sp && player.mayBuild() && level.mayInteract(player,pos)
                 && level.getBlockEntity(pos) instanceof PolyBlockEntity be) {
-            sp.openMenu(new SimpleMenuProvider((id, inv, p) -> new PolyMenu(id, inv, pos, be.poly(), be.revision()),
+            sp.openMenu(new SimpleMenuProvider((id, inv, p) -> new PolyMenu(id, inv, pos, be.document(), be.revision()),
                 Component.translatable("screen.copypoly.title")), buf -> {
-                    buf.writeBlockPos(pos); buf.writeVarIntArray(be.poly().packed()); buf.writeVarInt(be.revision());
+                    buf.writeBlockPos(pos); buf.writeVarIntArray(be.document().packed()); buf.writeVarInt(be.revision());
                 });
         }
     }
     @Override public void setPlacedBy(Level level, BlockPos pos, BlockState state, LivingEntity placer, ItemStack stack) {
         if (!level.isClientSide) {
-            if (level.getBlockEntity(pos) instanceof PolyBlockEntity be) be.setPoly(PolyItem.readShape(stack));
+            if (level.getBlockEntity(pos) instanceof PolyBlockEntity be) be.setDocument(PolyItem.readDocument(stack));
             super.setPlacedBy(level,pos,state,placer,stack);
         }
     }
     @Override protected List<ItemStack> getDrops(BlockState state, LootParams.Builder params) {
         List<ItemStack> drops = super.getDrops(state,params);
         if (params.getOptionalParameter(LootContextParams.BLOCK_ENTITY) instanceof PolyBlockEntity be)
-            for (ItemStack stack : drops) if (stack.is(asItem())) PolyItem.saveShape(stack, be.poly());
+            for (ItemStack stack : drops) if (stack.is(asItem())) PolyItem.saveDocument(stack, be.document());
         return drops;
     }
     @Override public ItemStack getCloneItemStack(BlockState state, HitResult hit, LevelReader level, BlockPos pos, Player player) {
         ItemStack stack = super.getCloneItemStack(state,hit,level,pos,player);
-        if (stack.is(asItem()) && level.getBlockEntity(pos) instanceof PolyBlockEntity be) PolyItem.saveShape(stack,be.poly());
+        if (stack.is(asItem()) && level.getBlockEntity(pos) instanceof PolyBlockEntity be) PolyItem.saveDocument(stack,be.document());
         return stack;
     }
 }
