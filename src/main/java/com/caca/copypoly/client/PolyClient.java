@@ -11,6 +11,7 @@ import net.neoforged.neoforge.client.event.*;
 @EventBusSubscriber(modid=Copypoly.MODID,bus=EventBusSubscriber.Bus.MOD,value=Dist.CLIENT)
 public final class PolyClient {
     @SubscribeEvent public static void models(ModelEvent.ModifyBakingResult event) {
+        PolyBlockEntity.setClientModelDataEnhancer(PolyModel::prepareBlockEntityModelData);
         event.getModels().replaceAll((id,model)->id.id().equals(Copypoly.id("copycat_polyhedron"))?new PolyModel(model):model);
     }
     @SubscribeEvent public static void colors(RegisterColorHandlersEvent.Block event) {

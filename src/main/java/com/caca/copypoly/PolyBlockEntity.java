@@ -13,14 +13,20 @@ import net.minecraft.world.phys.shapes.*;
 import net.neoforged.neoforge.client.model.data.ModelData;
 import net.neoforged.neoforge.client.model.data.ModelProperty;
 
+import java.util.function.BiFunction;
+
 public class PolyBlockEntity extends CopycatBlockEntity {
     public static final ModelProperty<Polyhedron> GEOMETRY = new ModelProperty<>();
+    private static volatile BiFunction<PolyBlockEntity, ModelData, ModelData> clientModelDataEnhancer;
     private Polyhedron poly = Polyhedron.CUBE;
     private VoxelShape shape;
     private int revision;
     private long lastEdit = Long.MIN_VALUE / 2;
 
     public PolyBlockEntity(BlockPos pos, BlockState state) { super(Copypoly.ENTITY.get(), pos, state); }
+    public static void setClientModelDataEnhancer(BiFunction<PolyBlockEntity, ModelData, ModelData> enhancer) {
+        clientModelDataEnhancer = enhancer;
+    }
     public Polyhedron poly() { return poly; }
     public int revision() { return revision; }
     public boolean tryBeginEdit() {
@@ -66,7 +72,12 @@ public class PolyBlockEntity extends CopycatBlockEntity {
             }
         }
     }
-    @Override public ModelData getModelData() { return super.getModelData().derive().with(GEOMETRY, poly).build(); }
+    @Override public ModelData getModelData() {
+        ModelData data = super.getModelData().derive().with(GEOMETRY, poly).build();
+        if (level == null || !level.isClientSide) return data;
+        BiFunction<PolyBlockEntity, ModelData, ModelData> enhancer = clientModelDataEnhancer;
+        return enhancer == null ? data : enhancer.apply(this, data);
+    }
     @Override public void transform(BlockEntity be, StructureTransform transform) {
         super.transform(be, transform);
         setPoly(Polyhedron.of(poly.points().stream().map(p -> {

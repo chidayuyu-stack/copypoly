@@ -30,6 +30,8 @@ public class PolyModel extends BakedModelWrapper<BakedModel> {
     private record Mesh(Map<RenderType,List<BakedQuad>> layers, TextureAtlasSprite particle) {}
     private record Key(Polyhedron poly, Direction direction, List<BakedQuad> source) {}
     private static final ModelProperty<Mesh> MESH = new ModelProperty<>();
+    private static final ChunkRenderTypeSet CANDIDATE_RENDER_TYPES = ChunkRenderTypeSet.of(
+        RenderType.solid(),RenderType.cutout(),RenderType.cutoutMipped(),RenderType.translucent());
     private final Map<Key,List<BakedQuad>> cache = Collections.synchronizedMap(new LinkedHashMap<>(512,.75f,true) {
         protected boolean removeEldestEntry(Map.Entry<Key,List<BakedQuad>> e) { return size()>512; }
     });
@@ -47,7 +49,17 @@ public class PolyModel extends BakedModelWrapper<BakedModel> {
             default -> p.z()>0?Direction.SOUTH:Direction.NORTH;
         };
     }
+    public static ModelData prepareBlockEntityModelData(PolyBlockEntity blockEntity, ModelData data) {
+        if (blockEntity.getLevel() == null) return data;
+        BlockState state = blockEntity.getBlockState();
+        BakedModel model = Minecraft.getInstance().getBlockRenderer().getBlockModel(state);
+        return model instanceof PolyModel polyModel
+            ? polyModel.getModelData(blockEntity.getLevel(), blockEntity.getBlockPos(), state, data)
+            : data;
+    }
     @Override public ModelData getModelData(BlockAndTintGetter world,BlockPos pos,BlockState state,ModelData data) {
+        Mesh existing = data.get(MESH);
+        if (existing != null) return data;
         BlockState material=CopycatModel.getMaterial(data);
         Polyhedron poly=data.get(PolyBlockEntity.GEOMETRY);
         if(poly==null) poly=Polyhedron.CUBE;
@@ -96,13 +108,15 @@ public class PolyModel extends BakedModelWrapper<BakedModel> {
     }
     @Override public List<BakedQuad> getQuads(BlockState state,Direction side,RandomSource rand,ModelData data,RenderType type) {
         if(side!=null) return List.of(); // Slanted faces must not be culled using the full-block neighbor test.
-        Mesh m=data.get(MESH); if(m==null) m=itemMesh();
+        Mesh m=data.get(MESH);
+        if(m==null) m=itemMesh();
         if(type!=null) return m.layers.getOrDefault(type,List.of());
         return m.layers.values().stream().flatMap(Collection::stream).toList();
     }
     @Override public ChunkRenderTypeSet getRenderTypes(BlockState s,RandomSource r,ModelData d) {
         Mesh m=d.get(MESH);
-        return m==null?ChunkRenderTypeSet.of(RenderType.solid()):ChunkRenderTypeSet.of(m.layers.keySet());
+        if(m==null)return CANDIDATE_RENDER_TYPES;
+        return ChunkRenderTypeSet.union(CANDIDATE_RENDER_TYPES,ChunkRenderTypeSet.of(m.layers.keySet()));
     }
     @Override public TextureAtlasSprite getParticleIcon(ModelData data) {
         Mesh m=data.get(MESH);return m==null?super.getParticleIcon(data):m.particle;
