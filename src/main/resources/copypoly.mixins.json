@@ -1,0 +1,9 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.caca.copypoly.mixin",
+  "plugin": "com.caca.copypoly.compat.OptionalPhysicsMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["sable.PolyRapierPipelineMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

@@ -49,7 +49,7 @@ neoForge {
         gameTestServer {
             type = "gameTestServer"
             sourceSet = sourceSets.gametest
-            gameDirectory = project.file('run/gametest')
+            gameDirectory = project.file(providers.gradleProperty('sableTest').getOrElse('false').toBoolean() ? 'run/sable-gametest' : 'run/gametest')
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
             systemProperty 'copypoly.persistencePhase', providers.gradleProperty('persistencePhase').getOrElse('')
         }
@@ -76,7 +76,20 @@ neoForge {
 }
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
-configurations { createBundle }
+configurations {
+    createBundle
+    sableBundle {
+        canBeConsumed = false
+        transitive = false
+    }
+}
+// Resolve Sable for compilation only; -PsableJar=/path/to.jar overrides the download.
+def sableJar = providers.gradleProperty('sableJar')
+def extractSableLibraries = tasks.register('extractSableLibraries', Sync) {
+    from(configurations.sableBundle.elements.map { elements -> elements.collect { zipTree(it.asFile) } })
+    include 'META-INF/jarjar/*sable_rapier*.jar', 'META-INF/jarjar/sable-companion*.jar'
+    into layout.buildDirectory.dir('sableLibraries')
+}
 // Compile against Create's bundled libraries, matching the selected Create version.
 def extractCreateLibraries = tasks.register('extractCreateLibraries', Sync) {
     from(configurations.createBundle.elements.map { elements -> elements.collect { zipTree(it.asFile) } })
@@ -84,6 +97,12 @@ def extractCreateLibraries = tasks.register('extractCreateLibraries', Sync) {
     into layout.buildDirectory.dir('createLibraries')
 }
 dependencies {
+    // Pin the NeoForge 1.21.1 / Sable 2.0.6 version ID to avoid the Fabric variant.
+    if (sableJar.isPresent()) sableBundle files(sableJar.get())
+    else sableBundle 'maven.modrinth:sable:fg9dTRz9'
+    compileOnly files(configurations.sableBundle)
+    compileOnly files(fileTree(layout.buildDirectory.dir('sableLibraries')) { include '**/*.jar' }).builtBy(extractSableLibraries)
+    if (providers.gradleProperty('sableTest').getOrElse('false').toBoolean()) runtimeOnly files(configurations.sableBundle)
     createBundle("maven.modrinth:create:${create_version}") { transitive = false }
     implementation("maven.modrinth:create:${create_version}") { transitive = false }
     compileOnly files(fileTree(layout.buildDirectory.dir('createLibraries')) { include '**/*.jar' }).builtBy(extractCreateLibraries)

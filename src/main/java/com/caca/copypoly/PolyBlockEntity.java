@@ -1,6 +1,7 @@
 package com.caca.copypoly;
 
 import com.caca.copypoly.geometry.Polyhedron;
+import com.caca.copypoly.compat.PhysicsCompat;
 import com.simibubi.create.content.decoration.copycat.CopycatBlockEntity;
 import com.simibubi.create.content.contraptions.StructureTransform;
 import net.minecraft.core.BlockPos;
@@ -40,6 +41,7 @@ public class PolyBlockEntity extends CopycatBlockEntity {
             lastEdit = level.getGameTime();
             notifyUpdate();
             level.updateNeighborsAt(worldPosition, getBlockState().getBlock());
+            PhysicsCompat.shapeChanged(level, worldPosition);
         }
     }
     public VoxelShape shape() {
@@ -50,6 +52,10 @@ public class PolyBlockEntity extends CopycatBlockEntity {
             shape = built.optimize();
         }
         return shape;
+    }
+    @Override public void onLoad() {
+        super.onLoad();
+        PhysicsCompat.shapeChanged(level, worldPosition);
     }
     @Override protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean packet) {
         super.write(tag, registries, packet);
@@ -66,6 +72,7 @@ public class PolyBlockEntity extends CopycatBlockEntity {
         revision = tag.getInt("Revision");
         if (previous != poly) {
             shape = null;
+            PhysicsCompat.shapeChanged(level, worldPosition);
             if (packet && level != null) {
                 requestModelDataUpdate();
                 level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);

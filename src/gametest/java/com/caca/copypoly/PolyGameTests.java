@@ -20,6 +20,7 @@ public final class PolyGameTests {
     @net.neoforged.bus.api.SubscribeEvent
     public static void register(net.neoforged.neoforge.event.RegisterGameTestsEvent event) {
         event.register(PolyGameTests.class);
+        if (net.neoforged.fml.ModList.get().isLoaded("sable")) event.register(SablePhysicsGameTests.class);
         if (!System.getProperty("copypoly.persistencePhase", "").isEmpty()) event.register(MaterialPersistenceProbe.class);
     }
     private static final BlockPos P=new BlockPos(2,2,2);
