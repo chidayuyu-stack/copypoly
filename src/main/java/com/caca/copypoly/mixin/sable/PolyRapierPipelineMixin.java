@@ -15,7 +15,7 @@ import org.spongepowered.asm.mixin.*;
 import org.spongepowered.asm.mixin.injection.*;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Sable 2.0.6: world terrain and moving sublevel plots. */
+/** Sable 2.0.5+: world terrain and moving sublevel plots. */
 @Pseudo
 @Mixin(targets = "dev.ryanhcode.sable.physics.impl.rapier.RapierPhysicsPipeline", remap = false)
 public abstract class PolyRapierPipelineMixin {
