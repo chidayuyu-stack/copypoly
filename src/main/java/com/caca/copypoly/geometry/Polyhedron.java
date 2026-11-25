@@ -1,24 +1,78 @@
 package com.caca.copypoly.geometry;
 
+import java.math.BigDecimal;
 import java.util.*;
 
-/** Immutable integer convex hull. All construction work is bounded by MAX_POINTS, never performed per tick. */
+/** Immutable fixed-point convex hull. Construction is bounded by MAX_POINTS, never performed per tick. */
 public final class Polyhedron {
     public static final int MAX_POINTS = 32;
     public static final int MAX_BOXES = 64;
-    public record Point(int x, int y, int z) implements Comparable<Point> {
-        public Point {
-            if (x < 0 || x > 16 || y < 0 || y > 16 || z < 0 || z > 16) throw new IllegalArgumentException("range");
+    public static final int SCALE = 1000;
+    public static final int MAX_COORDINATE = 16 * SCALE;
+
+    public static final class Point implements Comparable<Point> {
+        private final int x, y, z;
+        /** Coordinates are in editor units; generated positions round to the nearest thousandth. */
+        public Point(double x, double y, double z) {
+            this.x = fixed(x); this.y = fixed(y); this.z = fixed(z);
         }
-        public int packed() { return x << 10 | y << 5 | z; }
-        public static Point unpack(int n) {
+        private Point(long packed) {
+            if (packed < 0 || (packed >>> 42) != 0) throw new IllegalArgumentException("range");
+            x = (int)(packed >>> 28); y = (int)(packed >>> 14 & 16383); z = (int)(packed & 16383);
+            if (x > MAX_COORDINATE || y > MAX_COORDINATE || z > MAX_COORDINATE) throw new IllegalArgumentException("range");
+        }
+        public double x() { return x / (double)SCALE; }
+        public double y() { return y / (double)SCALE; }
+        public double z() { return z / (double)SCALE; }
+        public long packed() { return (long)x << 28 | (long)y << 14 | z; }
+        public static Point unpack(long n) { return new Point(n); }
+        public static Point fromLegacy(int n) {
             if (n < 0 || (n >>> 15) != 0) throw new IllegalArgumentException("range");
             return new Point(n >> 10, n >> 5 & 31, n & 31);
         }
-        public int compareTo(Point p) { return Integer.compare(packed(), p.packed()); }
+        public static Point parse(String x, String y, String z) {
+            return unpack((long)parseCoordinate(x) << 28 | (long)parseCoordinate(y) << 14 | parseCoordinate(z));
+        }
+        public String[] coordinates() { return new String[]{format(x), format(y), format(z)}; }
+        public int compareTo(Point p) { return Long.compare(packed(), p.packed()); }
+        @Override public boolean equals(Object other) { return other instanceof Point p && x == p.x && y == p.y && z == p.z; }
+        @Override public int hashCode() { return Long.hashCode(packed()); }
+        @Override public String toString() { return String.join(", ", coordinates()); }
     }
-    public record Plane(int x, int y, int z, int d) {
+    private static int fixed(double value) {
+        if (!Double.isFinite(value) || value < 0 || value > 16) throw new IllegalArgumentException("range");
+        return (int)Math.round(value * SCALE);
+    }
+    private static int parseCoordinate(String text) {
+        text = text.strip();
+        if (text.length() > 64 || !text.matches("[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)"))
+            throw new IllegalArgumentException("format");
+        BigDecimal value = new BigDecimal(text);
+        if (value.signum() < 0 || value.compareTo(BigDecimal.valueOf(16)) > 0) throw new IllegalArgumentException("range");
+        try { return value.movePointRight(3).intValueExact(); }
+        catch (ArithmeticException e) { throw new IllegalArgumentException("precision"); }
+    }
+    private static String format(int fixed) {
+        return BigDecimal.valueOf(fixed, 3).stripTrailingZeros().toPlainString();
+    }
+    /** Only transform roundoff may cross a boundary; genuine out-of-range positions are rejected. */
+    public static Point transformed(double x, double y, double z) {
+        return new Point(transformCoordinate(x), transformCoordinate(y), transformCoordinate(z));
+    }
+    private static double transformCoordinate(double value) {
+        if (!Double.isFinite(value) || value < -1e-7 || value > 16 + 1e-7) throw new IllegalArgumentException("range");
+        return Math.max(0, Math.min(16, value));
+    }
+    public record Plane(double x, double y, double z, double d) {
         public double distance(double a, double b, double c) { return x * a + y * b + z * c - d; }
+    }
+    /** Exact topology uses grid units; normalized planes are only for rendering and ray queries. */
+    private record ExactPlane(long x, long y, long z, long d) {
+        long distance(int a, int b, int c) { return x * a + y * b + z * c - d; }
+        Plane normalized() {
+            double length = Math.sqrt((double)x*x + (double)y*y + (double)z*z);
+            return new Plane(x/length, y/length, z/length, d/(SCALE*length));
+        }
     }
     public record Face(Plane plane, List<Point> vertices) {}
     /** Box coordinates use the same 0..16 units as points. */
@@ -32,15 +86,23 @@ public final class Polyhedron {
     public static final Polyhedron CUBE = of(CUBE_POINTS);
     private final List<Point> points;
     private final List<Face> faces;
+    private final List<ExactPlane> exactPlanes;
     private final Box bounds;
+    private final Point min, max;
     private volatile List<Box> boxes;
 
     public List<Point> points() { return points; }
     public List<Face> faces() { return faces; }
-    public int[] packed() { return points.stream().mapToInt(Point::packed).toArray(); }
-    public static Polyhedron fromPacked(int[] data) {
+    public long[] packed() { return points.stream().mapToLong(Point::packed).toArray(); }
+    public static Polyhedron fromPacked(long[] data) {
         if (data.length > MAX_POINTS) throw new IllegalArgumentException("count");
-        return of(Arrays.stream(data).mapToObj(Point::unpack).toList());
+        List<Point> points=Arrays.stream(data).mapToObj(Point::unpack).toList();
+        if(new HashSet<>(points).size()!=points.size())throw new IllegalArgumentException("duplicate");
+        return of(points);
+    }
+    public static Polyhedron fromLegacy(int[] data) {
+        if (data.length > MAX_POINTS) throw new IllegalArgumentException("count");
+        return of(Arrays.stream(data).mapToObj(Point::fromLegacy).toList());
     }
     public static Polyhedron of(Collection<Point> input) {
         if (input.size() > MAX_POINTS) throw new IllegalArgumentException("count");
@@ -56,38 +118,42 @@ public final class Polyhedron {
     }
     private Polyhedron(List<Point> pts) {
         points = pts;
-        Set<Plane> planes = new LinkedHashSet<>();
+        Set<ExactPlane> planes = new LinkedHashSet<>();
         boolean volume = false;
         // Exact integer half-space tests avoid epsilon cracks and ambiguous coplanar triangles.
         for (int i=0;i<pts.size()-2;i++) for(int j=i+1;j<pts.size()-1;j++) for(int k=j+1;k<pts.size();k++) {
             Point a=pts.get(i), b=pts.get(j), c=pts.get(k);
-            int ux=b.x-a.x, uy=b.y-a.y, uz=b.z-a.z, vx=c.x-a.x, vy=c.y-a.y, vz=c.z-a.z;
-            int nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
-            int g=gcd(gcd(Math.abs(nx),Math.abs(ny)),Math.abs(nz));
+            long ux=b.x-a.x, uy=b.y-a.y, uz=b.z-a.z, vx=c.x-a.x, vy=c.y-a.y, vz=c.z-a.z;
+            long nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+            long g=gcd(gcd(Math.abs(nx),Math.abs(ny)),Math.abs(nz));
             if(g==0) continue;
             nx/=g; ny/=g; nz/=g;
-            int d=nx*a.x+ny*a.y+nz*a.z;
+            long d=nx*a.x+ny*a.y+nz*a.z;
             boolean positive=false, negative=false;
             for(Point p:pts) {
-                int side=nx*p.x+ny*p.y+nz*p.z-d;
+                long side=nx*p.x+ny*p.y+nz*p.z-d;
                 positive |= side>0; negative |= side<0;
                 if(positive && negative) break;
             }
             volume |= positive || negative;
             if(positive && negative || !positive && !negative) continue;
-            planes.add(positive ? new Plane(-nx,-ny,-nz,-d) : new Plane(nx,ny,nz,d));
+            planes.add(positive ? new ExactPlane(-nx,-ny,-nz,-d) : new ExactPlane(nx,ny,nz,d));
         }
         if(!volume || planes.size()<4) throw new IllegalArgumentException("flat");
         List<Face> result=new ArrayList<>();
-        for(Plane plane:planes) result.add(new Face(plane, polygon(pts,plane)));
+        exactPlanes=List.copyOf(planes);
+        for(ExactPlane plane:planes) result.add(new Face(plane.normalized(), polygon(pts,plane)));
         faces=List.copyOf(result);
-        bounds=new Box(pts.stream().mapToInt(Point::x).min().orElseThrow(), pts.stream().mapToInt(Point::y).min().orElseThrow(),
-            pts.stream().mapToInt(Point::z).min().orElseThrow(), pts.stream().mapToInt(Point::x).max().orElseThrow(),
-            pts.stream().mapToInt(Point::y).max().orElseThrow(), pts.stream().mapToInt(Point::z).max().orElseThrow());
+        min=new Point(pts.stream().mapToDouble(Point::x).min().orElseThrow(), pts.stream().mapToDouble(Point::y).min().orElseThrow(), pts.stream().mapToDouble(Point::z).min().orElseThrow());
+        max=new Point(pts.stream().mapToDouble(Point::x).max().orElseThrow(), pts.stream().mapToDouble(Point::y).max().orElseThrow(), pts.stream().mapToDouble(Point::z).max().orElseThrow());
+        bounds=new Box(min.x(),min.y(),min.z(),max.x(),max.y(),max.z());
     }
-    private static int gcd(int a,int b) { while(b!=0) {int t=a%b;a=b;b=t;} return a; }
+    private static long gcd(long a,long b) { while(b!=0) {long t=a%b;a=b;b=t;} return a; }
     public static int dominant(Plane p) {
-        int x=Math.abs(p.x),y=Math.abs(p.y),z=Math.abs(p.z);
+        return dominant(p.x,p.y,p.z);
+    }
+    private static int dominant(double a,double b,double c) {
+        double x=Math.abs(a),y=Math.abs(b),z=Math.abs(c);
         return y>=x && y>=z ? 1 : x>=z ? 0 : 2;
     }
     private static int u(Point p,int axis) { return axis==0 ? p.z : p.x; }
@@ -95,8 +161,8 @@ public final class Polyhedron {
     private static long cross(Point a,Point b,Point c,int axis) {
         return (long)(u(b,axis)-u(a,axis))*(v(c,axis)-v(a,axis))-(long)(v(b,axis)-v(a,axis))*(u(c,axis)-u(a,axis));
     }
-    private static List<Point> polygon(List<Point> points,Plane plane) {
-        int axis=dominant(plane);
+    private static List<Point> polygon(List<Point> points,ExactPlane plane) {
+        int axis=dominant(plane.x,plane.y,plane.z);
         List<Point> p=points.stream().filter(t->plane.distance(t.x,t.y,t.z)==0)
             .sorted(Comparator.comparingInt((Point t)->u(t,axis)).thenComparingInt(t->v(t,axis))).toList();
         List<Point> h=new ArrayList<>();
@@ -105,9 +171,10 @@ public final class Polyhedron {
         for(int i=p.size()-2;i>=0;i--) { Point t=p.get(i); while(h.size()>lower && cross(h.get(h.size()-2),h.getLast(),t,axis)<=0) h.removeLast(); h.add(t); }
         h.removeLast();
         Point a=h.get(0),b=h.get(1),c=h.get(2);
-        int nx=(b.y-a.y)*(c.z-a.z)-(b.z-a.z)*(c.y-a.y);
-        int ny=(b.z-a.z)*(c.x-a.x)-(b.x-a.x)*(c.z-a.z);
-        int nz=(b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+        // Each normal is at most 2*16000^2; even their dot product fits in a long.
+        long nx=(long)(b.y-a.y)*(c.z-a.z)-(long)(b.z-a.z)*(c.y-a.y);
+        long ny=(long)(b.z-a.z)*(c.x-a.x)-(long)(b.x-a.x)*(c.z-a.z);
+        long nz=(long)(b.x-a.x)*(c.y-a.y)-(long)(b.y-a.y)*(c.x-a.x);
         if(nx*plane.x+ny*plane.y+nz*plane.z<0) Collections.reverse(h);
         return List.copyOf(h);
     }
@@ -126,14 +193,15 @@ public final class Polyhedron {
     }
     private List<Box> voxelize(int n) {
         double step=16.0/n;
+        int gridStep=MAX_COORDINATE/n;
         boolean[][][] cells=new boolean[n][n][n];
         for(int x=0;x<n;x++) for(int y=0;y<n;y++) for(int z=0;z<n;z++) {
-            double x0=Math.max(x*step,bounds.x0), y0=Math.max(y*step,bounds.y0), z0=Math.max(z*step,bounds.z0);
-            double x1=Math.min((x+1)*step,bounds.x1), y1=Math.min((y+1)*step,bounds.y1), z1=Math.min((z+1)*step,bounds.z1);
+            int x0=Math.max(x*gridStep,min.x), y0=Math.max(y*gridStep,min.y), z0=Math.max(z*gridStep,min.z);
+            int x1=Math.min((x+1)*gridStep,max.x), y1=Math.min((y+1)*gridStep,max.y), z1=Math.min((z+1)*gridStep,max.z);
             if(x0>=x1 || y0>=y1 || z0>=z1) continue;
             boolean hit=true;
             // Conservative plane rejection: never loses thin valid hulls (unlike center sampling).
-            for(Face f:faces) {Plane p=f.plane; if(p.distance(p.x>=0?x0:x1,p.y>=0?y0:y1,p.z>=0?z0:z1)>=0) {hit=false;break;}}
+            for(ExactPlane p:exactPlanes) {if(p.distance(p.x>=0?x0:x1,p.y>=0?y0:y1,p.z>=0?z0:z1)>=0) {hit=false;break;}}
             cells[x][y][z]=hit;
         }
         List<Box> result=new ArrayList<>();
@@ -155,8 +223,7 @@ public final class Polyhedron {
             if(line.isBlank()) continue;
             String[] xyz=line.strip().replace("(","").replace(")","").split("[\\s,，]+");
             if(xyz.length!=3) throw new IllegalArgumentException("format");
-            try {result.add(new Point(Integer.parseInt(xyz[0]),Integer.parseInt(xyz[1]),Integer.parseInt(xyz[2])));}
-            catch(NumberFormatException e) {throw new IllegalArgumentException("format");}
+            result.add(Point.parse(xyz[0],xyz[1],xyz[2]));
             if(result.size()>MAX_POINTS) throw new IllegalArgumentException("count");
         }
         return result;

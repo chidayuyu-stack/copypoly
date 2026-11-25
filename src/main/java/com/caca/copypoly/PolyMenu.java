@@ -14,7 +14,7 @@ public class PolyMenu extends AbstractContainerMenu {
     private final net.minecraft.world.level.Level level;
     private final PolyBlockEntity target;
     public PolyMenu(int id, Inventory inv, RegistryFriendlyByteBuf buf) {
-        this(id, inv, buf.readBlockPos(), Polyhedron.fromPacked(buf.readVarIntArray(Polyhedron.MAX_POINTS)), buf.readVarInt());
+        this(id, inv, buf.readBlockPos(), Polyhedron.fromPacked(PolyShapeData.readPoints(buf)), buf.readVarInt());
     }
     public PolyMenu(int id, Inventory inv, BlockPos pos, Polyhedron initial, int revision) {
         super(Copypoly.MENU.get(), id); this.pos=pos.immutable(); this.initial=initial; this.revision=revision;

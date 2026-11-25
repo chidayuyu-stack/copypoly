@@ -63,9 +63,44 @@ final class PreviewGeometry {
         return Math.hypot(x - a.x - t * dx, y - a.y - t * dy);
     }
 
-    static int draggedCoordinate(int start, double dx, double dy, Vec3 projectedAxis) {
+    static double draggedCoordinate(double start, double dx, double dy, Vec3 projectedAxis) {
+        return draggedCoordinate(start, dx, dy, projectedAxis, false);
+    }
+
+    static double draggedCoordinate(double start, double dx, double dy, Vec3 projectedAxis, boolean fine) {
         double length = projectedAxis.x * projectedAxis.x + projectedAxis.y * projectedAxis.y;
         if (length < .01) return start;
-        return clamp(start + (dx * projectedAxis.x + dy * projectedAxis.y) / length);
+        double delta = (dx * projectedAxis.x + dy * projectedAxis.y) / length;
+        if (Math.abs(delta) < 1e-10) return start;
+        double target = fine ? start + Math.round(delta * .1 / .01) * .01 : Math.round(start + delta);
+        return Math.round(Math.max(0, Math.min(16, target)) * Polyhedron.SCALE) / (double)Polyhedron.SCALE;
+    }
+
+    /** Mouse deltas accumulate from a mode anchor, while Esc always uses the original point. */
+    static final class Drag {
+        final Polyhedron.Point original;
+        private final int axis;
+        private final Vec3 vector;
+        private Polyhedron.Point anchor;
+        private double anchorX, anchorY, lastX, lastY;
+        private boolean fine;
+
+        Drag(Polyhedron.Point point, int axis, Vec3 vector, double x, double y, boolean fine) {
+            original = point; this.axis = axis; this.vector = vector;
+            anchor = point; anchorX = lastX = x; anchorY = lastY = y; this.fine = fine;
+        }
+
+        void mode(boolean fine, Polyhedron.Point current) {
+            if (this.fine == fine) return;
+            this.fine = fine; anchor = current; anchorX = lastX; anchorY = lastY;
+        }
+
+        Polyhedron.Point move(double x, double y, boolean fine, Polyhedron.Point current) {
+            mode(fine, current);
+            lastX = x; lastY = y;
+            double[] values = {anchor.x(), anchor.y(), anchor.z()};
+            values[axis] = draggedCoordinate(values[axis], x-anchorX, y-anchorY, vector, fine);
+            return new Polyhedron.Point(values[0], values[1], values[2]);
+        }
     }
 }

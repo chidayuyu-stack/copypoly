@@ -11,11 +11,11 @@ import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 public final class PolyPackets {
     /** Client callback is installed only by the client entry point, so dedicated servers never link GUI classes. */
     public static java.util.function.Consumer<Result> clientResult = r -> {};
-    public record Apply(int menu, int revision, int[] points) implements CustomPacketPayload {
+    public record Apply(int menu, int revision, long[] points) implements CustomPacketPayload {
         public static final Type<Apply> TYPE = new Type<>(Copypoly.id("apply"));
         public static final StreamCodec<RegistryFriendlyByteBuf, Apply> CODEC = StreamCodec.of(
-            (b,p)->{b.writeVarInt(p.menu);b.writeVarInt(p.revision);b.writeVarIntArray(p.points);},
-            b->new Apply(b.readVarInt(),b.readVarInt(),b.readVarIntArray(Polyhedron.MAX_POINTS)));
+            (b,p)->{b.writeVarInt(p.menu);b.writeVarInt(p.revision);PolyShapeData.writePoints(b,p.points);},
+            b->new Apply(b.readVarInt(),b.readVarInt(),PolyShapeData.readPoints(b)));
         public Type<Apply> type() { return TYPE; }
     }
     public record Result(int menu, String error) implements CustomPacketPayload {
@@ -25,7 +25,7 @@ public final class PolyPackets {
         public Type<Result> type() {return TYPE;}
     }
     public static void register(RegisterPayloadHandlersEvent event) {
-        var r=event.registrar("1");
+        var r=event.registrar("2");
         r.playToClient(Result.TYPE,Result.CODEC,(p,c)->clientResult.accept(p));
         r.playToServer(Apply.TYPE,Apply.CODEC,(p,c)->{
             if (!(c.player() instanceof ServerPlayer sp)) return;

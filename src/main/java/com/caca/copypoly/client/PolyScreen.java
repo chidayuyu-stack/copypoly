@@ -22,11 +22,18 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
     // Row identity survives hull sorting/deduplication and deletion of other rows.
     private static final class Row {
         final String[] values;
-        Row(Polyhedron.Point p) { values=new String[]{""+p.x(),""+p.y(),""+p.z()}; }
+        private Polyhedron.Point cached;
+        private boolean parsed;
+        Row(Polyhedron.Point p) { values=p.coordinates();cached=p;parsed=true; }
         Polyhedron.Point point() {
-            try {return new Polyhedron.Point(Integer.parseInt(values[0]),Integer.parseInt(values[1]),Integer.parseInt(values[2]));}
-            catch(IllegalArgumentException e) {return null;}
+            if(!parsed) {
+                try {cached=Polyhedron.Point.parse(values[0],values[1],values[2]);}
+                catch(IllegalArgumentException e) {cached=null;}
+                parsed=true;
+            }
+            return cached;
         }
+        void edit(int axis,String value) {values[axis]=value;parsed=false;}
     }
     private final List<Row> rows=new ArrayList<>();
     private final Map<Row,EditBox[]> fields=new IdentityHashMap<>();
@@ -39,8 +46,7 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
     private boolean dirty, valid=true, waiting, rotating, rotated, adding;
     private int dragAxis=-1;
     private double pressX,pressY;
-    private Polyhedron.Point dragStart;
-    private Vec3 dragVector;
+    private PreviewGeometry.Drag drag;
     private long changedAt,lastValidation;
     private Component error=Component.empty();
     private double yaw=.65,pitch=.45,zoom=1;
@@ -54,7 +60,7 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
     @Override protected void init() {
         imageWidth=Math.min(480,width-12);imageHeight=Math.min(324,height-12);
         super.init();
-        tableWidth=Math.max(140,imageWidth/2-12);previewX=leftPos+tableWidth+16;previewWidth=imageWidth-tableWidth-28;
+        tableWidth=Math.max(176,imageWidth/2-12);previewX=leftPos+tableWidth+16;previewWidth=imageWidth-tableWidth-28;
         visibleRows=Math.max(3,(imageHeight-126)/22);
         material=minecraft.level.getBlockEntity(menu.pos) instanceof PolyBlockEntity be?be.getMaterial():AllBlocks.COPYCAT_BASE.getDefaultState();
         rebuild();updatePreview();
@@ -74,8 +80,9 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
                 final int a=axis;
                 EditBox box=new EditBox(font,leftPos+26+axis*(fieldWidth+2),topPos+42+line*22,fieldWidth,18,
                     Component.literal((index+1)+" "+"XYZ".charAt(axis)));
-                box.setMaxLength(3);box.setValue(row.values[axis]);boxes[axis]=box;
-                box.setResponder(value->{row.values[a]=value;markDirty();});addRenderableWidget(box);
+                box.setMaxLength(32);box.setValue(row.values[axis]);boxes[axis]=box;
+                box.setTooltip(Tooltip.create(tr("coordinate_tooltip")));
+                box.setResponder(value->{row.edit(a,value);markDirty();});addRenderableWidget(box);
             }
             addRenderableWidget(Button.builder(Component.literal("×"),b->delete(row))
                 .bounds(leftPos+tableWidth-10,topPos+41+line*22,18,20).build());
@@ -94,12 +101,14 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
         Button next=addRenderableWidget(Button.builder(Component.literal(">"),b->{page++;rebuild();}).bounds(leftPos+tableWidth-20,navY,24,20).build());next.active=page<maxPage;
         int y=topPos+imageHeight-57;
         int w=(tableWidth-6)/3;
-        button("copy",leftPos+12,y,w,()->minecraft.keyboardHandler.setClipboard(text()));
+        button("copy",leftPos+12,y,w,()->minecraft.keyboardHandler.setClipboard(String.join("\n",
+            rows.stream().map(r->r.point()==null?String.join(", ",r.values):r.point().toString()).toList())));
         button("paste",leftPos+14+w,y,w,()->{
             try {
                 String clipboard=minecraft.keyboardHandler.getClipboard();
                 if(clipboard.length()>4096)throw new IllegalArgumentException("count");
                 List<Polyhedron.Point> points=Polyhedron.parse(clipboard);
+                if(new HashSet<>(points).size()!=points.size())throw new IllegalArgumentException("duplicate");
                 Polyhedron.of(points);setRows(points);markDirty();rebuild();
             } catch(IllegalArgumentException ex){error=tr("error."+ex.getMessage());}
         });
@@ -225,7 +234,7 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
             if(candidate!=null) {
                 Vec3 p=screenPoint(candidate);int color=occupied(candidate,null)?0xffff7979:0xff72ffe1;
                 line(g,p.add(-5,0,0),p.add(5,0,0),color);line(g,p.add(0,-5,0),p.add(0,5,0),color);
-                g.drawString(font,candidate.x()+", "+candidate.y()+", "+candidate.z(),(int)p.x+7,(int)p.y+6,color,false);
+                g.drawString(font,candidate.toString(),(int)p.x+7,(int)p.y+6,color,false);
             }
         }
         g.disableScissor();
@@ -259,10 +268,10 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
     private void moveSelected(Polyhedron.Point point) {
         if(selected==null || point.equals(selected.point()))return;
         if(occupied(point,selected)){error=tr("error.duplicate");return;}
-        String[] values={""+point.x(),""+point.y(),""+point.z()};
+        String[] values=point.coordinates();
         EditBox[] boxes=fields.get(selected);
         for(int a=0;a<3;a++) {
-            selected.values[a]=values[a];
+            selected.edit(a,values[a]);
             if(boxes!=null && !boxes[a].getValue().equals(values[a]))boxes[a].setValue(values[a]);
         }
         markDirty();
@@ -319,6 +328,7 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
     }
     @Override public boolean mouseClicked(double x,double y,int button) {
         if(waiting)return true;
+        if(dragAxis>=0)return true;
         if(button==1 && insideView(x,y)) {
             if(adding){adding=false;rebuild();return true;}
             rotating=true;rotated=false;pressX=x;pressY=y;setFocused(null);return true;
@@ -333,7 +343,7 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
             Row hit=pickPoint(x,y);
             if(hit!=null){select(hit==selected?null:hit);return true;}
             int axis=pickAxis(x,y);
-            if(axis>=0) {dragAxis=axis;dragStart=selected.point();dragVector=view().axis(axis);return true;}
+            if(axis>=0) {dragAxis=axis;drag=new PreviewGeometry.Drag(selected.point(),axis,view().axis(axis),x,y,hasShiftDown());return true;}
             rotating=true;rotated=false;return true;
         }
         if(button==0)for(var entry:fields.entrySet()) {
@@ -344,9 +354,7 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
     @Override public boolean mouseDragged(double x,double y,int button,double dx,double dy) {
         if(waiting)return true;
         if(dragAxis>=0 && button==0) {
-            int[] coordinates={dragStart.x(),dragStart.y(),dragStart.z()};
-            coordinates[dragAxis]=PreviewGeometry.draggedCoordinate(coordinates[dragAxis],x-pressX,y-pressY,dragVector);
-            moveSelected(new Polyhedron.Point(coordinates[0],coordinates[1],coordinates[2]));return true;
+            moveSelected(drag.move(x,y,hasShiftDown(),selected.point()));return true;
         }
         if(rotating && (button==0 || button==1)) {
             if(!rotated && Math.hypot(x-pressX,y-pressY)<3)return true;
@@ -355,7 +363,7 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
         return super.mouseDragged(x,y,button,dx,dy);
     }
     @Override public boolean mouseReleased(double x,double y,int button) {
-        if(button==0 && dragAxis>=0){dragAxis=-1;validate();return true;}
+        if(button==0 && dragAxis>=0){moveSelected(drag.move(x,y,hasShiftDown(),selected.point()));dragAxis=-1;validate();return true;}
         if(rotating && (button==0 || button==1)) {
             if(button==0 && !rotated && insideView(x,y))select(null);
             rotating=false;return true;
@@ -370,17 +378,26 @@ public class PolyScreen extends AbstractContainerScreen<PolyMenu> {
     }
     @Override public boolean keyPressed(int key,int scan,int mods) {
         if(key==GLFW.GLFW_KEY_ESCAPE){
-            if(dragAxis>=0){dragAxis=-1;moveSelected(dragStart);validate();return true;}
+            if(dragAxis>=0){dragAxis=-1;moveSelected(drag.original);validate();return true;}
             if(adding){adding=false;rebuild();return true;}
             if(selected!=null){select(null);return true;}
             onClose();return true;
         }
         if(waiting)return true;
+        if(dragAxis>=0 && (key==GLFW.GLFW_KEY_LEFT_SHIFT || key==GLFW.GLFW_KEY_RIGHT_SHIFT)) {
+            drag.mode(true,selected.point());return true;
+        }
         if(getFocused() instanceof EditBox box && box.keyPressed(key,scan,mods))return true;
         // Inventory hotkey must not close an editor while a text field is focused.
         if(getFocused() instanceof EditBox)return false;
         if(dragAxis>=0 || rotating)return true;
         if((key==GLFW.GLFW_KEY_DELETE || key==GLFW.GLFW_KEY_BACKSPACE) && selected!=null){delete(selected);return true;}
         return super.keyPressed(key,scan,mods);
+    }
+    @Override public boolean keyReleased(int key,int scan,int mods) {
+        if(dragAxis>=0 && (key==GLFW.GLFW_KEY_LEFT_SHIFT || key==GLFW.GLFW_KEY_RIGHT_SHIFT)) {
+            drag.mode(hasShiftDown(),selected.point());return true;
+        }
+        return super.keyReleased(key,scan,mods);
     }
 }

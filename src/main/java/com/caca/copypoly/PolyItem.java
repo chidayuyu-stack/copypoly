@@ -12,12 +12,14 @@ import java.util.List;
 public class PolyItem extends BlockItem {
     public PolyItem(Block block) { super(block, new Item.Properties()); }
     public static void saveShape(ItemStack stack, Polyhedron poly) {
-        if (poly == Polyhedron.CUBE) return;
-        CustomData.update(DataComponents.CUSTOM_DATA, stack, tag -> tag.putIntArray("PolyPoints", poly.packed()));
+        CustomData.update(DataComponents.CUSTOM_DATA, stack, tag -> {
+            if (poly == Polyhedron.CUBE) PolyShapeData.clear(tag);
+            else PolyShapeData.write(tag, poly);
+        });
     }
     public static Polyhedron readShape(ItemStack stack) {
         CompoundTag tag = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
-        try { return tag.contains("PolyPoints") ? Polyhedron.fromPacked(tag.getIntArray("PolyPoints")) : Polyhedron.CUBE; }
+        try { return PolyShapeData.read(tag, "PolyPoints"); }
         catch (IllegalArgumentException e) { return Polyhedron.CUBE; }
     }
     @Override public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> lines, TooltipFlag flag) {

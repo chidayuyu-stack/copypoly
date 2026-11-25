@@ -40,6 +40,15 @@ public final class ClientCompatibilityProbe {
                     throw new IllegalStateException("CopyPoly preview has missing texture for "+block);
             }
         }
+        var tiny=Polyhedron.of(Polyhedron.CUBE_POINTS.stream().map(p->new Polyhedron.Point(
+            8.125+p.x()/16*.001,7.999+p.y()/16*.001,.001+p.z()/16*.001)).toList());
+        var tinyQuads=poly.preview(tiny,Blocks.STONE.defaultBlockState());
+        if(tinyQuads.size()!=12)throw new IllegalStateException("Thousandth-unit cube lost faces: "+tinyQuads.size());
+        for(var quad:tinyQuads) {
+            int[] data=quad.getVertices();int stride=data.length/4;
+            for(int i=0;i<4;i++)for(int axis=0;axis<3;axis++)
+                if(!Float.isFinite(Float.intBitsToFloat(data[i*stride+axis])))throw new IllegalStateException("Decimal mesh has non-finite vertex");
+        }
         com.mojang.logging.LogUtils.getLogger().info("CopyPoly client compatibility probe passed: model registration, item mesh, render fallbacks, seven material meshes");
         client.stop();
     }

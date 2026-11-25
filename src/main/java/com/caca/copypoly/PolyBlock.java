@@ -110,7 +110,7 @@ public class PolyBlock extends CopycatBlock {
                 && level.getBlockEntity(pos) instanceof PolyBlockEntity be) {
             sp.openMenu(new SimpleMenuProvider((id, inv, p) -> new PolyMenu(id, inv, pos, be.poly(), be.revision()),
                 Component.translatable("screen.copypoly.title")), buf -> {
-                    buf.writeBlockPos(pos); buf.writeVarIntArray(be.poly().packed()); buf.writeVarInt(be.revision());
+                    buf.writeBlockPos(pos); PolyShapeData.writePoints(buf,be.poly().packed()); buf.writeVarInt(be.revision());
                 });
         }
     }

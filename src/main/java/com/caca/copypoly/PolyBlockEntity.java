@@ -59,15 +59,15 @@ public class PolyBlockEntity extends CopycatBlockEntity {
     }
     @Override protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean packet) {
         super.write(tag, registries, packet);
-        tag.putIntArray("Points", poly.packed()); tag.putInt("Revision", revision);
+        PolyShapeData.write(tag, poly); tag.putInt("Revision", revision);
     }
     @Override public void writeSafe(CompoundTag tag, HolderLookup.Provider registries) {
-        super.writeSafe(tag, registries); tag.putIntArray("Points", poly.packed());
+        super.writeSafe(tag, registries); PolyShapeData.write(tag, poly);
     }
     @Override protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean packet) {
         super.read(tag, registries, packet);
         Polyhedron previous = poly;
-        try { poly = tag.contains("Points") ? Polyhedron.fromPacked(tag.getIntArray("Points")) : Polyhedron.CUBE; }
+        try { poly = PolyShapeData.read(tag, "Points"); }
         catch (IllegalArgumentException e) { poly = Polyhedron.CUBE; }
         revision = tag.getInt("Revision");
         if (previous != poly) {
@@ -89,7 +89,7 @@ public class PolyBlockEntity extends CopycatBlockEntity {
         super.transform(be, transform);
         setPoly(Polyhedron.of(poly.points().stream().map(p -> {
             Vec3 v = transform.applyWithoutOffset(new Vec3(p.x()/16.0, p.y()/16.0, p.z()/16.0));
-            return new Polyhedron.Point((int)Math.round(v.x*16), (int)Math.round(v.y*16), (int)Math.round(v.z*16));
+            return Polyhedron.transformed(v.x*16, v.y*16, v.z*16);
         }).toList()));
     }
 }

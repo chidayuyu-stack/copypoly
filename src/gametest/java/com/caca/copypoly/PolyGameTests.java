@@ -25,6 +25,100 @@ public final class PolyGameTests {
     }
     private static final BlockPos P=new BlockPos(2,2,2);
     private static Polyhedron tetra() {return Polyhedron.of(Polyhedron.parse("0,0,0;16,0,0;0,16,0;0,0,16"));}
+    private static Polyhedron decimalShape() {return Polyhedron.of(Polyhedron.parse("0.001,0,0;15.999,0,0;0,8.125,0;0,0,16"));}
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void decimalsSurviveSaveSyncSafeWriteCloneDropAndPlacement(GameTestHelper h) {
+        h.setBlock(P,Copypoly.POLY.get());
+        var be=(PolyBlockEntity)h.getBlockEntity(P);var shape=decimalShape();be.setPoly(shape);
+        var registries=h.getLevel().registryAccess();
+        var saved=be.saveWithoutMetadata(registries);
+        h.assertTrue(saved.contains(PolyShapeData.KEY) && !saved.contains("Points"),"Save did not migrate to new format");
+        var restored=new PolyBlockEntity(h.absolutePos(P),be.getBlockState());
+        restored.loadWithComponents(saved,registries);
+        h.assertTrue(restored.poly()==shape,"Save/load rounded decimal points");
+        var safe=new net.minecraft.nbt.CompoundTag();be.writeSafe(safe,registries);
+        h.assertTrue(PolyShapeData.read(safe,"Points")==shape,"Create safe write lost decimals");
+        restored.readClient(be.writeClient(new net.minecraft.nbt.CompoundTag(),registries),registries);
+        h.assertTrue(restored.poly()==shape,"Client update lost decimals");
+        var hit=new BlockHitResult(Vec3.atCenterOf(h.absolutePos(P)),Direction.UP,h.absolutePos(P),false);
+        var clone=Copypoly.POLY.get().getCloneItemStack(be.getBlockState(),hit,h.getLevel(),h.absolutePos(P),h.makeMockPlayer(GameType.CREATIVE));
+        h.assertTrue(PolyItem.readShape(clone)==shape,"Clone lost decimals");
+        var drops=Block.getDrops(be.getBlockState(),h.getLevel(),h.absolutePos(P),be);
+        h.assertTrue(drops.size()==1 && PolyItem.readShape(drops.getFirst())==shape,"Drop lost decimals");
+        var next=P.offset(1,0,0);h.setBlock(next,Copypoly.POLY.get());
+        Copypoly.POLY.get().setPlacedBy(h.getLevel(),h.absolutePos(next),be.getBlockState(),h.makeMockPlayer(GameType.SURVIVAL),drops.getFirst());
+        h.assertTrue(((PolyBlockEntity)h.getBlockEntity(next)).poly()==shape,"Placement lost decimals");
+        h.assertTrue(!restored.shape().isEmpty(),"Decimal collision is empty");
+        PolyItem.saveShape(clone,Polyhedron.CUBE);
+        h.assertTrue(PolyItem.readShape(clone)==Polyhedron.CUBE,"Reset retained old item geometry");
+        h.succeed();
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void legacyBlockAndItemMigrateOnShapeWrite(GameTestHelper h) {
+        h.setBlock(P,Copypoly.POLY.get());var be=(PolyBlockEntity)h.getBlockEntity(P);
+        var registries=h.getLevel().registryAccess();
+        var legacy=be.saveWithoutMetadata(registries);
+        legacy.remove(PolyShapeData.KEY);legacy.putIntArray("Points",new int[]{0,16<<10,16<<5,16});
+        be.loadWithComponents(legacy,registries);
+        h.assertTrue(be.poly()==tetra(),"Old block changed shape");
+        var migrated=be.saveWithoutMetadata(registries);
+        h.assertTrue(migrated.contains(PolyShapeData.KEY) && !migrated.contains("Points"),"Block retained old format");
+        var item=new ItemStack(Copypoly.ITEM.get());
+        net.minecraft.world.item.component.CustomData.update(net.minecraft.core.component.DataComponents.CUSTOM_DATA,item,
+            tag->tag.putIntArray("PolyPoints",new int[]{0,16<<10,16<<5,16}));
+        h.assertTrue(PolyItem.readShape(item)==tetra(),"Old item changed shape");
+        PolyItem.saveShape(item,PolyItem.readShape(item));
+        var data=item.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA).copyTag();
+        h.assertTrue(data.contains(PolyShapeData.KEY) && !data.contains("PolyPoints"),"Item retained old format");
+        h.succeed();
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void createRotationsAndMirrorsPreserveThousandths(GameTestHelper h) {
+        h.setBlock(P,Copypoly.POLY.get());var be=(PolyBlockEntity)h.getBlockEntity(P);var shape=decimalShape();
+        for(var axis:Direction.Axis.values()) {
+            be.setPoly(shape);
+            var turn=new com.simibubi.create.content.contraptions.StructureTransform(BlockPos.ZERO,axis,Rotation.CLOCKWISE_90,Mirror.NONE);
+            for(int step=0;step<4;step++) {
+                be.transform(be,turn);
+                if(step==1) {
+                    var expected=Polyhedron.of(shape.points().stream().map(p->new Polyhedron.Point(
+                        axis==Direction.Axis.X?p.x():16-p.x(),axis==Direction.Axis.Y?p.y():16-p.y(),axis==Direction.Axis.Z?p.z():16-p.z())).toList());
+                    h.assertTrue(be.poly()==expected,"Half turn rounded or incorrectly rotated decimals on "+axis);
+                }
+            }
+            h.assertTrue(be.poly()==shape,"Full rotation lost thousandths on "+axis);
+        }
+        for(var mirror:new Mirror[]{Mirror.LEFT_RIGHT,Mirror.FRONT_BACK}) {
+            be.setPoly(shape);
+            var transform=new com.simibubi.create.content.contraptions.StructureTransform(BlockPos.ZERO,Direction.Axis.Y,Rotation.NONE,mirror);
+            be.transform(be,transform);
+            h.assertTrue(be.poly()!=shape,"Mirror did not transform geometry");
+            be.transform(be,transform);
+            h.assertTrue(be.poly()==shape,"Double mirror lost thousandths");
+        }
+        h.succeed();
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void decimalPacketsRoundTripAndApplyWithValidation(GameTestHelper h) {
+        h.setBlock(P,Copypoly.POLY.get());var be=(PolyBlockEntity)h.getBlockEntity(P);
+        var player=h.makeMockPlayer(GameType.SURVIVAL);player.setPos(Vec3.atCenterOf(h.absolutePos(P)));
+        var menu=new PolyMenu(10,player.getInventory(),h.absolutePos(P),be.poly(),be.revision());player.containerMenu=menu;
+        var buf=new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(),h.getLevel().registryAccess());
+        try {
+            buf.writeBlockPos(h.absolutePos(P));PolyShapeData.writePoints(buf,decimalShape().packed());buf.writeVarInt(menu.revision);
+            var clientMenu=new PolyMenu(10,player.getInventory(),buf);
+            h.assertTrue(clientMenu.initial==decimalShape(),"Menu transport rounded coordinates");
+            buf.clear();
+            var packet=new PolyPackets.Apply(10,menu.revision,decimalShape().packed());
+            PolyPackets.Apply.CODEC.encode(buf,packet);
+            var received=PolyPackets.Apply.CODEC.decode(buf);
+            h.assertTrue(PolyPackets.apply(player,new PolyPackets.Apply(10,menu.revision,new long[]{1L<<42,0,1,2})).equals("range"),"Invalid packed coordinate accepted");
+            h.runAfterDelay(5,()->{
+                h.assertTrue(PolyPackets.apply(player,received).isEmpty(),"Valid decimal packet rejected");
+                h.assertTrue(be.poly()==decimalShape(),"Server lost submitted decimals");h.succeed();
+            });
+        } finally {buf.release();}
+    }
     @GameTest(template="empty",templateNamespace="copypoly")
     public static void appliedMaterialsSurviveRepeatedSaveAndReload(GameTestHelper h) {
         var block=Copypoly.POLY.get();
@@ -128,7 +222,7 @@ public final class PolyGameTests {
         var menu=new PolyMenu(8,player.getInventory(),h.absolutePos(P),be.poly(),be.revision());
         player.containerMenu=menu;
         h.assertTrue(PolyPackets.apply(player,new PolyPackets.Apply(9,menu.revision,tetra().packed())).equals("permission"),"Wrong menu accepted");
-        h.assertTrue(PolyPackets.apply(player,new PolyPackets.Apply(8,menu.revision,new int[]{0})).equals("count"),"Invalid points accepted");
+        h.assertTrue(PolyPackets.apply(player,new PolyPackets.Apply(8,menu.revision,new long[]{0})).equals("count"),"Invalid points accepted");
         h.assertTrue(PolyPackets.apply(player,new PolyPackets.Apply(8,menu.revision,tetra().packed())).equals("busy"),"Invalid request bypassed throttle");
         h.assertTrue(be.poly()==Polyhedron.CUBE,"Rejected packet changed shape");
         h.runAfterDelay(5,()->{

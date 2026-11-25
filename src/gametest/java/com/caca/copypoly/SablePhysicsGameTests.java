@@ -27,7 +27,7 @@ import org.joml.Vector3d;
 /** Real Rapier native contacts, run only with the optional Sable distribution. */
 @PrefixGameTestTemplate(false)
 public final class SablePhysicsGameTests {
-    private static Polyhedron slab(int height) {
+    private static Polyhedron slab(double height) {
         return Polyhedron.of(Polyhedron.CUBE_POINTS.stream()
                 .map(p -> new Polyhedron.Point(p.x(), p.y() == 0 ? 0 : height, p.z())).toList());
     }
@@ -131,7 +131,7 @@ public final class SablePhysicsGameTests {
         upload(h,pipeline,p); if (!SectionPos.of(p).equals(SectionPos.of(q))) upload(h,pipeline,q);
         height(h,.25,drop(h,pipeline,p.getX()+.5,p.getY(),p.getZ()+.5),"Thin terrain collider was replaced by a cube");
         height(h,.75,drop(h,pipeline,q.getX()+.5,q.getY(),q.getZ()+.5),"Same-state neighboring shape used the wrong collider");
-        for (int pixels : new int[]{8, 2, 10, 4}) {
+        for (double pixels : new double[]{8, 2, 10, 4, 8.125, 2.001}) {
             a.setPoly(slab(pixels)); // Only the production BE hook refreshes native geometry.
             height(h,pixels/16.0,drop(h,pipeline,p.getX()+.5,p.getY(),p.getZ()+.5),"BE edit left stale native collision");
             height(h,.75,drop(h,pipeline,q.getX()+.5,q.getY(),q.getZ()+.5),"Editing another position corrupted this collider");
@@ -175,7 +175,7 @@ public final class SablePhysicsGameTests {
                 for (int pixels : new int[]{4, 12, 2, 8}) {
                     if (pixels == 8) {
                         var tag = be.saveWithoutMetadata(level.registryAccess());
-                        tag.putIntArray("Points",slab(pixels).packed());
+                        PolyShapeData.write(tag,slab(pixels));
                         be.loadWithComponents(tag,level.registryAccess());
                     } else if (pixels != 4) be.setPoly(slab(pixels));
                     pipeline.teleport(body,new Vector3d(ground.getX()+.5,ground.getY()+3,ground.getZ()+.5),new Quaterniond().rotateX(java.lang.Math.PI));

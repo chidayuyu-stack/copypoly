@@ -171,7 +171,8 @@ public class PolyModel extends BakedModelWrapper<BakedModel> {
         int normal=((byte)Math.round(n.x()/length*127)&255)|(((byte)Math.round(n.y()/length*127)&255)<<8)|(((byte)Math.round(n.z()/length*127)&255)<<16);
         for(int t=1;t<polygon.size()-1;t++) {
             Vec3[] triangle={polygon.getFirst(),polygon.get(t),polygon.get(t+1),polygon.get(t+1)};
-            if(triangle[1].subtract(triangle[0]).cross(triangle[2].subtract(triangle[0])).lengthSqr()<1e-16)continue;
+            // A legitimate 0.001-unit grid triangle has squared cross length about 1.5e-17.
+            if(triangle[1].subtract(triangle[0]).cross(triangle[2].subtract(triangle[0])).lengthSqr()<1e-24)continue;
             int[] out=new int[src.length];
             for(int i=0;i<4;i++) {
                 System.arraycopy(src,0,out,i*stride,stride);
