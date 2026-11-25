@@ -116,7 +116,8 @@ public class PolyBlock extends CopycatBlock {
     }
     @Override public void setPlacedBy(Level level, BlockPos pos, BlockState state, LivingEntity placer, ItemStack stack) {
         if (!level.isClientSide) {
-            if (level.getBlockEntity(pos) instanceof PolyBlockEntity be) be.setPoly(PolyItem.readShape(stack));
+            if (level.getBlockEntity(pos) instanceof PolyBlockEntity be)
+                PolyItem.readShapeIfPresent(stack).ifPresent(be::setPoly);
             super.setPlacedBy(level,pos,state,placer,stack);
         }
     }

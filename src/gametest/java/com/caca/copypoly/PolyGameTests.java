@@ -2,6 +2,7 @@ package com.caca.copypoly;
 
 import com.caca.copypoly.geometry.Polyhedron;
 import com.simibubi.create.AllItems;
+import com.simibubi.create.foundation.utility.BlockHelper;
 import net.minecraft.core.*;
 import net.minecraft.gametest.framework.*;
 import net.minecraft.world.*;
@@ -51,6 +52,26 @@ public final class PolyGameTests {
         h.assertTrue(!restored.shape().isEmpty(),"Decimal collision is empty");
         PolyItem.saveShape(clone,Polyhedron.CUBE);
         h.assertTrue(PolyItem.readShape(clone)==Polyhedron.CUBE,"Reset retained old item geometry");
+        h.succeed();
+    }
+    @GameTest(template="empty",templateNamespace="copypoly")
+    public static void schematicPlacementKeepsBlockEntityShapeWithoutItemShape(GameTestHelper h) {
+        var sourceState=Copypoly.POLY.get().defaultBlockState();
+        h.setBlock(P,sourceState);
+        var source=(PolyBlockEntity)h.getBlockEntity(P);
+        var shape=decimalShape();
+        source.setPoly(shape);
+        source.setMaterial(Blocks.GLASS.defaultBlockState());
+        source.setConsumedItem(new ItemStack(Items.GLASS));
+
+        var data=new net.minecraft.nbt.CompoundTag();
+        source.writeSafe(data,h.getLevel().registryAccess());
+        var target=h.absolutePos(P.offset(2,0,0));
+        BlockHelper.placeSchematicBlock(h.getLevel(),sourceState,target,new ItemStack(Copypoly.ITEM.get()),data);
+
+        var placed=(PolyBlockEntity)h.getLevel().getBlockEntity(target);
+        h.assertTrue(placed.poly()==shape,"Schematic placement replaced restored geometry with the item default");
+        h.assertTrue(placed.getMaterial().is(Blocks.GLASS),"Schematic placement lost copycat material");
         h.succeed();
     }
     @GameTest(template="empty",templateNamespace="copypoly")
